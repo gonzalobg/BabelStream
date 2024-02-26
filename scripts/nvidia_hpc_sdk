@@ -1,0 +1,45 @@
+#!/usr/bin/env sh
+# Copyright (c) 2024, NVIDIA CORPORATION. All rights reservd.
+#
+# For full license terms please see the LICENSE file distributed with this
+# source code
+#
+# Compiles & runs models supported by NVIDIA HPC SDK for NVIDIA GPUs.
+#
+# Usage ./scripts/nvidia_hpc_sdk <model> <arraysize>
+set -ex
+# Pick the HPC SDK version used with this variable
+IMG=nvcr.io/nvidia/nvhpc:24.1-devel-cuda12.3-ubuntu22.04
+
+MODEL=cuda
+if [ ! -z $1 ]; then
+    MODEL=$1
+fi
+#SIZE=268435456 #This is a power of 2
+SIZE=268435457
+if [ ! -z $2 ]; then
+    SIZE=$2
+fi
+
+rm -rf build || true
+mkdir -p build
+
+docker run \
+  -it \
+  --gpus=all \
+  --privileged \
+  -u $(id -u):$(id -g) \
+  -v $(pwd):/src \
+  -w /src \
+  $IMG \
+  bash -c "set -ex && \
+           cmake -Bbuild -H. \
+             -DMODEL=${1} \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_CUDA_COMPILER=nvcc \
+             -DCUDA_ARCH=native \
+	     -DMEM=DEFAULT \
+             -DCMAKE_CXX_COMPILER=g++ \
+           && \
+           cmake --build build -v && \
+           ./build/${1}-stream --arraysize ${SIZE}"

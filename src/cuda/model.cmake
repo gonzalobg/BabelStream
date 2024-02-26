@@ -22,6 +22,14 @@ register_flag_optional(CUDA_EXTRA_FLAGS
 
 
 macro(setup)
+    set(CMAKE_CXX_STANDARD  20)
+    set(CMAKE_CUDA_STANDARD 20)
+
+    if(NOT DEFINED CMAKE_CUDA20_STANDARD_COMPILE_OPTION)
+      set(CMAKE_CUDA20_STANDARD_COMPILE_OPTION "")
+      set(CMAKE_CUDA20_EXTENSION_COMPILE_OPTION "")
+    endif()
+
 
     # XXX CMake 3.18 supports CMAKE_CUDA_ARCHITECTURES/CUDA_ARCHITECTURES but we support older CMakes
     if(POLICY CMP0104)
@@ -32,7 +40,8 @@ macro(setup)
     register_definitions(${MEM})
 
     # add -forward-unknown-to-host-compiler for compatibility reasons
-    set(CMAKE_CUDA_FLAGS ${CMAKE_CUDA_FLAGS} "-forward-unknown-to-host-compiler" "-arch=${CUDA_ARCH}" ${CUDA_EXTRA_FLAGS})
+    set(CMAKE_CUDA_FLAGS ${CMAKE_CUDA_FLAGS} "-forward-unknown-to-host-compiler"
+      "-arch=${CUDA_ARCH}" "--extended-lambda" ${CUDA_EXTRA_FLAGS})
     string(REPLACE ";" " " CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
 
     # CMake defaults to -O2 for CUDA at Release, let's wipe that and use the global RELEASE_FLAG

@@ -1,6 +1,7 @@
-
 // Copyright (c) 2015-16 Tom Deakin, Simon McIntosh-Smith,
 // University of Bristol HPC
+//
+// Copyright (c) 2024, NVIDIA CORPORATION. All rights reservd.
 //
 // For full license terms please see the LICENSE file distributed with this
 // source code
@@ -15,26 +16,29 @@
 
 #define IMPLEMENTATION_STRING "CUDA"
 
-#define TBSIZE 1024
-
 template <class T>
 class CUDAStream : public Stream<T>
 {
   protected:
     // Size of arrays
-    int array_size;
+    size_t array_size;
 
     // Host array for partial sums for dot kernel
-    T *sums;
+    long long* sums;
+    int num_dot_sums;
 
     // Device side pointers to arrays
-    T *d_a;
-    T *d_b;
-    T *d_c;
-    T *d_sum;
+    T *d_a, *d_b, *d_c;
 
-    // Number of blocks for dot kernel
-    int dot_num_blocks;
+    // Number of blocks per grid:
+    int num_blocks_copy, num_blocks_mul, num_blocks_add,
+        num_blocks_triad, num_blocks_dot, num_blocks_nstream;
+
+    // Number of threads per block:
+    int num_threads_copy, num_threads_mul, num_threads_add,
+        num_threads_triad, num_threads_dot, num_threads_nstream;
+
+    long long s;
 
   public:
 
