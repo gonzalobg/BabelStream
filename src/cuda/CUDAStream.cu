@@ -9,7 +9,6 @@
 #include "CUDAStream.h"
 #include <cooperative_groups/reduce.h>
 #include <cstdio>
-#include <cuda/atomic>
 #include <cuda/std/array>
 #include <cuda/std/tuple>
 
@@ -34,6 +33,17 @@ __device__ int for_each(/*grid_group _,*/ int n, UnaryFunction&& f) {
   return i;
 }
 
+template <typename T, typename UnaryFunction>
+__device__ int for_each16(/*grid_group _,*/ int n, UnaryFunction&& f) {
+  constexpr int w = 16 / sizeof(T);
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  for (; i < ceil_div(n, w) - 1; i += gridDim.x * blockDim.x)
+    for (int j = i * w; j < (i * w + w); ++j) f(j);
+  i *= w;
+  for (; i < n; ++i) f(i);
+  return i;
+}
+
 template <typename T>
 struct V {
   static constexpr int w = 16/sizeof(T);
@@ -48,6 +58,7 @@ template <typename T, size_t N> using vals = cuda::std::array<T, N>;
 
 template <typename UnaryFunction, typename T, size_t N, size_t M>
 __device__ void for_each_vec(/*grid_group _,*/ int n, outs<T, N> d, ins<T, M> s, UnaryFunction&& f) {
+#if defined(VECTORIZATION)
   using V = V<T>;
   constexpr int w = sizeof(V) / sizeof(T);
 
@@ -77,11 +88,26 @@ __device__ void for_each_vec(/*grid_group _,*/ int n, outs<T, N> d, ins<T, M> s,
       for (int j = 0; j < N; ++j) d[j][k] = outs[k];
     }
   }
+#elif defined(SIMPLE_VECTORIZATION)
+  for_each16<T>(n, [&](int i) {
+    cuda::std::array<T, M> ins;
+    for (int j = 0; j < M; ++j) ins[j] = s[j][i];
+    cuda::std::array<T, N> outs{cuda::std::apply(f, ins)};
+    for (int j = 0; j < N; ++j) d[j][i] = outs[j];
+  });
+#else
+  for_each(n, [&](int i) {
+    cuda::std::array<T, M> ins;
+    for (int j = 0; j < M; ++j) ins[j] = s[j][i];
+    cuda::std::array<T, N> outs{cuda::std::apply(f, ins)};
+    for (int j = 0; j < N; ++j) d[j][i] = outs[j];
+  });
+#endif  
 }
 
 template <typename T>
 struct sum_t {
-  alignas(512) cuda::atomic<T, cuda::thread_scope_device> data;
+  alignas(512) T data;
 };
 
 void blocks_and_threads(int& minGridSize, int& blockSize, size_t array_size, void* func, int esize,
@@ -92,7 +118,11 @@ void blocks_and_threads(int& minGridSize, int& blockSize, size_t array_size, voi
   // Clamp at 256 threads:
   blockSize = std::min(blockSize, maxBlockSize);
   minGridSize = nthreads / blockSize;
+#if defined(VECTORIZATION)  
   int vw = 16 / esize;
+#else
+  int vw = 1;
+#endif  
   int actualGridSize = ceil_div(array_size / vw, blockSize);
   if (maxWaveSize > -1) {
     // Clamp at n thread block waves:
@@ -105,12 +135,15 @@ void blocks_and_threads(int& minGridSize, int& blockSize, size_t array_size, voi
 template <typename F>
 void autotune(char const* name, int& minGridSize, int& blockSize, int& num_dot_sums,
 	      size_t array_size, void* func, int esize, F&& kernel) {
+  bool with_sums = num_dot_sums != -1;
+  int minWaves = 0;
+#if defined(AUTOTUNE)  
   constexpr int niter = 20;
   double dt = std::numeric_limits<double>::max();
-  int minGridLocal = 0, minBlockLocal = 0, minSums = max_sums, minWaves = 0;
+  int minGridLocal = 0, minBlockLocal = 0, minSums = max_sums;
   std::vector<int> num_sums{-1};
   std::vector<int> block_sizes{128, 256, 512, 1024};
-  bool with_sums = num_dot_sums != -1;
+  
   if (with_sums) {
     block_sizes = std::vector<int>{512, 1024};
     num_sums = std::vector<int>{1, 2, 8, 32, 64, 128, 256, max_sums};
@@ -143,6 +176,15 @@ void autotune(char const* name, int& minGridSize, int& blockSize, int& num_dot_s
   minGridSize = minGridLocal;
   blockSize = minBlockLocal;
   if (with_sums) num_dot_sums = minSums;
+#else
+  if (with_sums) {
+    minWaves = 64;
+    blocks_and_threads(minGridSize, blockSize, array_size, func, esize, 1024, minWaves);
+  } else {
+    minWaves = -1;
+    blocks_and_threads(minGridSize, blockSize, array_size, func, esize, 256, minWaves);
+  }
+#endif  
 
   std::cout << name << " kernel config: " << minGridSize << " groups of (fixed) size " << blockSize
 	    << " in " << minWaves << " waves ";
@@ -186,8 +228,9 @@ void CUDAStream<T>::read_arrays(std::vector<T>& a, std::vector<T>& b, std::vecto
 }
 
 template <typename T>
-__global__ void copy_kernel(const T * a, T * c, size_t array_size) {
-  using V = V<T>;
+__global__ void copy_kernel(const T * __restrict a, T * __restrict c, size_t array_size) {
+  a = (const T*)__builtin_assume_aligned(a, 16);
+  c = (T*)__builtin_assume_aligned(c, 16);
   for_each_vec(array_size, outs<T,1>{c}, ins<T,1>{a}, [=](T a) {
     return a;
   });
@@ -276,7 +319,7 @@ __global__ void dot_kernel(const T * a, const T * b, sum_t<T>* sums, int num_sum
     auto g = cg::coalesced_threads();
     auto r = cg::reduce(g, data[threadIdx.x], cg::plus<T>{});
     cg::invoke_one(g, [&] {
-      sums[blockIdx.x % num_sums].data.fetch_add(r, cuda::memory_order_relaxed);
+	atomicAdd(&sums[blockIdx.x % num_sums].data, r);
     });
   }
 }
@@ -284,11 +327,11 @@ __global__ void dot_kernel(const T * a, const T * b, sum_t<T>* sums, int num_sum
 template <class T>
 T CUDAStream<T>::dot() {
   sum_t<T>* p = (sum_t<T>*)sums;
-  for (int i = 0; i < num_dot_sums; ++i) p[i].data.store(T(0), cuda::memory_order_relaxed);
+  for (int i = 0; i < num_dot_sums; ++i) p[i].data = 0;
   dot_kernel<<<num_blocks_dot, num_threads_dot, 0, *stream(s)>>>(d_a, d_b, p, num_dot_sums, array_size);
   CU(cudaStreamSynchronize(*stream(s)));
   T sum = 0;
-  for (int i = 0; i < num_dot_sums; ++i) sum += p[i].data.load(cuda::memory_order_relaxed);
+  for (int i = 0; i < num_dot_sums; ++i) sum += p[i].data;
   return sum;
 }
 
@@ -349,7 +392,7 @@ CUDAStream<T>::CUDAStream(const int ARRAY_SIZE, const int device_index) {
   autotune("Add", num_blocks_add, num_threads_add, num_dot_sums, array_size, (void*)add_kernel<T>, sizeof(T), [&] { add(); });
   autotune("Triad", num_blocks_triad, num_threads_triad, num_dot_sums, array_size, (void*)triad_kernel<T>, sizeof(T), [&] { triad(); });
   autotune("Nstream", num_blocks_nstream, num_threads_nstream, num_dot_sums, array_size, (void*)nstream_kernel<T>, sizeof(T), [&] { nstream(); });
-  num_dot_sums = 1;
+  num_dot_sums = max_sums;
   autotune("Dot", num_blocks_dot, num_threads_dot, num_dot_sums, array_size, (void*)dot_kernel<T>, sizeof(T), [&] { dot(); });
 }
 

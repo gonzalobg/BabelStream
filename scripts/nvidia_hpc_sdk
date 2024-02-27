@@ -39,6 +39,74 @@ docker run \
              -DCMAKE_CUDA_COMPILER=nvcc \
              -DCUDA_ARCH=native \
 	     -DMEM=DEFAULT \
+	     -DAUTOTUNE=ON \
+ 	     -DVECTORIZATION=ON \
+             -DCMAKE_CXX_COMPILER=g++ \
+           && \
+           cmake --build build -v && \
+           ./build/${1}-stream --arraysize ${SIZE}"
+
+docker run \
+  -it \
+  --gpus=all \
+  --privileged \
+  -u $(id -u):$(id -g) \
+  -v $(pwd):/src \
+  -w /src \
+  $IMG \
+  bash -c "set -ex && \
+           cmake -Bbuild -H. \
+             -DMODEL=${1} \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_CUDA_COMPILER=nvcc \
+             -DCUDA_ARCH=native \
+	     -DMEM=DEFAULT \
+	     -DAUTOTUNE=ON \
+ 	     -DVECTORIZATION=OFF \
+             -DCMAKE_CXX_COMPILER=g++ \
+           && \
+           cmake --build build -v && \
+           ./build/${1}-stream --arraysize ${SIZE}"
+
+docker run \
+  -it \
+  --gpus=all \
+  --privileged \
+  -u $(id -u):$(id -g) \
+  -v $(pwd):/src \
+  -w /src \
+  $IMG \
+  bash -c "set -ex && \
+           cmake -Bbuild -H. \
+             -DMODEL=${1} \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_CUDA_COMPILER=nvcc \
+             -DCUDA_ARCH=native \
+	     -DMEM=DEFAULT \
+	     -DAUTOTUNE=OFF \
+ 	     -DVECTORIZATION=ON \
+             -DCMAKE_CXX_COMPILER=g++ \
+           && \
+           cmake --build build -v && \
+           ./build/${1}-stream --arraysize ${SIZE}"
+
+docker run \
+  -it \
+  --gpus=all \
+  --privileged \
+  -u $(id -u):$(id -g) \
+  -v $(pwd):/src \
+  -w /src \
+  $IMG \
+  bash -c "set -ex && \
+           cmake -Bbuild -H. \
+             -DMODEL=${1} \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_CUDA_COMPILER=nvcc \
+             -DCUDA_ARCH=native \
+	     -DMEM=DEFAULT \
+	     -DAUTOTUNE=OFF \
+ 	     -DVECTORIZATION=OFF \
              -DCMAKE_CXX_COMPILER=g++ \
            && \
            cmake --build build -v && \
