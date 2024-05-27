@@ -5,6 +5,8 @@
 // source code
 
 #include "CUDAStream.h"
+#include <thrust/scan.h>
+#include <thrust/execution_policy.h>
 
 [[noreturn]] inline void error(char const* file, int line, char const* expr, cudaError_t e) {
   std::fprintf(stderr, "Error at %s:%d: %s (%d)\n  %s\n", file, line, cudaGetErrorString(e), e, expr);
@@ -19,9 +21,55 @@ __host__ __device__ constexpr size_t ceil_div(size_t a, size_t b) { return (a + 
 
 cudaStream_t stream;
 
+template <typename T>
+T* alloc_device(const intptr_t array_size) {
+  size_t array_bytes = sizeof(T) * array_size;
+  T* p = nullptr;
+#if defined(MANAGED)
+  CU(cudaMallocManaged(&p, array_bytes));
+#elif defined(PAGEFAULT)
+  p = (T*)malloc(array_bytes);
+#else
+  CU(cudaMalloc(&p, array_bytes));
+#endif
+  if (p == nullptr) throw std::runtime_error("Failed to allocate device array");
+  return p;
+}
+
+template <typename T>
+T* alloc_host(const intptr_t array_size) {
+  size_t array_bytes = sizeof(T) * array_size;
+  T* p = nullptr;
+#if defined(PAGEFAULT)
+  p = (T*)malloc(array_bytes);
+#else
+  CU(cudaHostAlloc(&p, array_bytes, cudaHostAllocDefault));
+#endif
+  if (p == nullptr) throw std::runtime_error("Failed to allocate host array");
+  return p;
+}
+
+template <typename T>
+void free_device(T* p) {
+#if defined(PAGEFAULT)
+  free(p);
+#else
+  CU(cudaFree(p));
+#endif
+}
+
+template <typename T>
+void free_host(T* p) {
+#if defined(PAGEFAULT)
+  free(p);
+#else
+  CU(cudaFreeHost(p));
+#endif
+}
+
 template <class T>
-CUDAStream<T>::CUDAStream(const intptr_t array_size, const int device_index)
-  : array_size(array_size)
+CUDAStream<T>::CUDAStream(const intptr_t array_size, const int device_index, const bool will_run_scan)
+  : array_size(array_size), alloc_scan(will_run_scan)
 {
   // Set device
   int count;
@@ -51,57 +99,49 @@ CUDAStream<T>::CUDAStream(const intptr_t array_size, const int device_index)
   // Size of partial sums for dot kernels
   size_t sums_bytes = sizeof(T) * dot_num_blocks;
   size_t array_bytes = sizeof(T) * array_size;
-  size_t total_bytes = array_bytes * size_t(3) + sums_bytes;
+  size_t scan_bytes = alloc_scan? size_t(2) * array_size * sizeof(scan_t<T>) : 0;
+  size_t total_bytes = array_bytes * size_t(3) + scan_bytes + sums_bytes;
   std::cout << "Reduction kernel config: " << dot_num_blocks << " groups of (fixed) size " << TBSIZE << std::endl;
 
   // Check buffers fit on the device
   if (props.totalGlobalMem < total_bytes)
     throw std::runtime_error("Device does not have enough memory for all 3 buffers");
 
-  // Create device buffers
-#if defined(MANAGED)
-  CU(cudaMallocManaged(&d_a, array_bytes));
-  CU(cudaMallocManaged(&d_b, array_bytes));
-  CU(cudaMallocManaged(&d_c, array_bytes));
-  CU(cudaHostAlloc(&sums, sums_bytes, cudaHostAllocDefault));
-#elif defined(PAGEFAULT)
-  d_a = (T*)malloc(array_bytes);
-  d_b = (T*)malloc(array_bytes);
-  d_c = (T*)malloc(array_bytes);
-  sums = (T*)malloc(sums_bytes);
-#else
-  CU(cudaMalloc(&d_a, array_bytes));
-  CU(cudaMalloc(&d_b, array_bytes));
-  CU(cudaMalloc(&d_c, array_bytes));
-  CU(cudaHostAlloc(&sums, sums_bytes, cudaHostAllocDefault));
-#endif
+  // Allocate buffers:
+  d_a = alloc_device<T>(array_size);
+  d_b = alloc_device<T>(array_size);
+  d_c = alloc_device<T>(array_size);
+  sums = alloc_host<T>(dot_num_blocks);
+  if (alloc_scan) {
+    d_si = alloc_device<scan_t<T>>(array_size);
+    d_so = alloc_device<scan_t<T>>(array_size);
+  }
 }
 
 template <class T>
 CUDAStream<T>::~CUDAStream()
 {
   CU(cudaStreamDestroy(stream));
-
-#if defined(PAGEFAULT)
-  free(d_a);
-  free(d_b);
-  free(d_c);
-  free(sums);
-#else
-  CU(cudaFree(d_a));
-  CU(cudaFree(d_b));
-  CU(cudaFree(d_c));
-  CU(cudaFreeHost(sums));
-#endif
+  free_device(d_a);
+  free_device(d_b);
+  free_device(d_c);
+  free_host(sums);
+  if (alloc_scan) {
+    free_device(d_si);
+    free_device(d_so);
+  }
 }
 
 template <typename T>
-__global__ void init_kernel(T * a, T * b, T * c, T initA, T initB, T initC, size_t array_size)
+__global__ void init_kernel(T* a, T* b, T* c, scan_t<T>* si, T initA, T initB, T initC, size_t array_size, bool alloc_scan)
 {  
   for (size_t i = (size_t)threadIdx.x + (size_t)blockDim.x * blockIdx.x; i < array_size; i += (size_t)gridDim.x * blockDim.x) {
     a[i] = initA;
     b[i] = initB;
     c[i] = initC;
+    if (alloc_scan) {
+      si[i] = static_cast<scan_t<T>>(i);
+    }
   }
 }
 
@@ -109,14 +149,18 @@ template <class T>
 void CUDAStream<T>::init_arrays(T initA, T initB, T initC)
 {
   size_t blocks = ceil_div(array_size, TBSIZE);
-  init_kernel<<<blocks, TBSIZE, 0, stream>>>(d_a, d_b, d_c, initA, initB, initC, array_size);
+  init_kernel<<<blocks, TBSIZE, 0, stream>>>(d_a, d_b, d_c, d_si, initA, initB, initC, array_size, alloc_scan);
   CU(cudaPeekAtLastError());
   CU(cudaStreamSynchronize(stream));
 }
 
 template <class T>
-void CUDAStream<T>::read_arrays(std::vector<T>& a, std::vector<T>& b, std::vector<T>& c)
+void CUDAStream<T>::read_arrays(std::vector<T>& a, std::vector<T>& b, std::vector<T>& c, std::vector<scan_t<T>>& s)
 {
+  if (alloc_scan && s.size() != array_size) {
+    std::cerr << "Host Scan array size mismatch" << std::endl;
+    std::terminate();
+  }
   // Copy device memory to host
 #if defined(PAGEFAULT) || defined(MANAGED)
   CU(cudaStreamSynchronize(stream));
@@ -125,11 +169,17 @@ void CUDAStream<T>::read_arrays(std::vector<T>& a, std::vector<T>& b, std::vecto
     a[i] = d_a[i];
     b[i] = d_b[i];
     c[i] = d_c[i];
+    if (alloc_scan) {
+      s[i] = d_so[i];
+    }
   }
 #else
   CU(cudaMemcpy(a.data(), d_a, a.size()*sizeof(T), cudaMemcpyDeviceToHost));
   CU(cudaMemcpy(b.data(), d_b, b.size()*sizeof(T), cudaMemcpyDeviceToHost));
   CU(cudaMemcpy(c.data(), d_c, c.size()*sizeof(T), cudaMemcpyDeviceToHost));
+  if (alloc_scan) {
+    CU(cudaMemcpy(s.data(), d_so, c.size()*sizeof(scan_t<T>), cudaMemcpyDeviceToHost));
+  }
 #endif
 }
 
@@ -252,6 +302,56 @@ T CUDAStream<T>::dot()
   for (intptr_t i = 0; i < dot_num_blocks; ++i) sum += sums[i];
 
   return sum;
+}
+
+template <class T>
+void CUDAStream<T>::scan()
+{
+  if (!alloc_scan) {
+    std::cerr << "Trying to run scan but storage not allocated" << std::endl;
+    std::terminate();
+  }
+  thrust::exclusive_scan(thrust::cuda::par.on(stream), d_si, d_si + array_size, d_so);
+  CU(cudaPeekAtLastError());
+  CU(cudaStreamSynchronize(stream));
+}
+
+template <typename T>
+__global__ void read_kernel(T* a, size_t array_size)
+{
+  for (size_t i = (size_t)threadIdx.x + (size_t)blockDim.x * blockIdx.x; i < array_size; i += (size_t)gridDim.x * blockDim.x) {
+    T tmp = a[i];
+    // Control-dependency on loading a[i]: never true, but checking it requires loading value:
+    if (tmp == T(3.14)) {
+      a[i] = 2 * tmp;
+    }
+  }
+}
+
+template <class T>
+void CUDAStream<T>::read()
+{
+  size_t blocks = ceil_div(array_size, TBSIZE);
+  read_kernel<<<blocks, TBSIZE, 0, stream>>>(d_a, array_size);
+  CU(cudaPeekAtLastError());
+  CU(cudaStreamSynchronize(stream));
+}
+
+template <typename T>
+__global__ void write_kernel(T* a, T initA, size_t array_size)
+{
+  for (size_t i = (size_t)threadIdx.x + (size_t)blockDim.x * blockIdx.x; i < array_size; i += (size_t)gridDim.x * blockDim.x) {
+    a[i] = initA;
+  }
+}
+
+template <class T>
+void CUDAStream<T>::write(T initA)
+{
+  size_t blocks = ceil_div(array_size, TBSIZE);
+  write_kernel<<<blocks, TBSIZE, 0, stream>>>(d_a, initA, array_size);
+  CU(cudaPeekAtLastError());
+  CU(cudaStreamSynchronize(stream));
 }
 
 void listDevices(void)

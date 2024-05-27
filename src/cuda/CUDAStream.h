@@ -32,11 +32,15 @@ class CUDAStream : public Stream<T>
     T *d_b;
     T *d_c;
 
+    // Allocate memory for scan
+    bool alloc_scan;
+    scan_t<T> *d_si, *d_so;
+
     // Number of blocks for dot kernel
     intptr_t dot_num_blocks;
 
   public:
-    CUDAStream(const intptr_t, const int);
+    CUDAStream(const intptr_t, const int, const bool will_run_scan);
     ~CUDAStream();
 
     virtual void copy() override;
@@ -45,7 +49,11 @@ class CUDAStream : public Stream<T>
     virtual void triad() override;
     virtual void nstream() override;
     virtual T dot() override;
+    virtual void read() override;
+    virtual void write(T initA) override;
+    virtual void scan() override;
 
     virtual void init_arrays(T initA, T initB, T initC) override;
-    virtual void read_arrays(std::vector<T>& a, std::vector<T>& b, std::vector<T>& c) override;
+    virtual void read_arrays(std::vector<T>& a, std::vector<T>& b, std::vector<T>& c,
+                             std::vector<scan_t<T>>& s) override;
 };

@@ -1,4 +1,3 @@
-
 // Copyright (c) 2015-16 Tom Deakin, Simon McIntosh-Smith,
 // University of Bristol HPC
 //
@@ -37,7 +36,7 @@ std::string csv_separator = ",";
 // - Classic: 5 classic kernels: Copy, Mul, Add, Triad, Dot.
 // - All: all kernels.
 // - Individual kernels only.
-enum class BenchId : int {Copy, Mul, Add, Triad, Nstream, Dot, Classic, All};
+enum class BenchId : int {Copy, Mul, Add, Triad, Nstream, Dot, Scan, Read, Write, Classic, All};
 
 struct Benchmark {
   BenchId id;
@@ -50,14 +49,17 @@ struct Benchmark {
 };
 
 // Benchmarks in the order in which - if present - should be run for validation purposes:
-constexpr size_t num_benchmarks = 6;
+constexpr size_t num_benchmarks = 9;
 std::array<Benchmark, num_benchmarks> bench = {
+  Benchmark { .id = BenchId::Write,   .label = "Write",   .weight = 1, .classic = false },
   Benchmark { .id = BenchId::Copy,    .label = "Copy",    .weight = 2, .classic = true  },
   Benchmark { .id = BenchId::Mul,     .label = "Mul",     .weight = 2, .classic = true  },
   Benchmark { .id = BenchId::Add,     .label = "Add",     .weight = 3, .classic = true  },
   Benchmark { .id = BenchId::Triad,   .label = "Triad",   .weight = 3, .classic = true  },
   Benchmark { .id = BenchId::Dot,     .label = "Dot",     .weight = 2, .classic = true  },
-  Benchmark { .id = BenchId::Nstream, .label = "Nstream", .weight = 4, .classic = false }
+  Benchmark { .id = BenchId::Nstream, .label = "Nstream", .weight = 4, .classic = false },
+  Benchmark { .id = BenchId::Scan,    .label = "Scan",    .weight = 2, .classic = false },
+  Benchmark { .id = BenchId::Read,    .label = "Read",    .weight = 1, .classic = false }
 };
 
 // Selected benchmarks to run: default is all 5 classic benchmarks.
@@ -68,6 +70,11 @@ bool run_benchmark(Benchmark const& b) {
   if (selection == BenchId::All)                  return true;
   if (selection == BenchId::Classic && b.classic) return true;
   return selection == b.id;
+}
+
+// Returns true if the Scan benchmark needs to be run:
+bool will_run_scan() {
+  return selection == BenchId::All || selection == BenchId::Scan;
 }
 
 // Benchmark run order
@@ -122,12 +129,15 @@ std::vector<std::vector<double>> run_all(std::unique_ptr<Stream<T>>& stream, T& 
   auto run = [&](Benchmark const& b)
   {
     switch(b.id) {
+    case BenchId::Write:   return stream->write(startA);
     case BenchId::Copy:    return stream->copy();
     case BenchId::Mul:     return stream->mul();
     case BenchId::Add:     return stream->add();
     case BenchId::Triad:   return stream->triad();
     case BenchId::Dot:     sum = stream->dot(); return;
     case BenchId::Nstream: return stream->nstream();
+    case BenchId::Scan:    return stream->scan();
+    case BenchId::Read:    return stream->read();
     default:
       std::cerr << "Unimplemented benchmark: " << b.label << std::endl;
       abort();
@@ -175,7 +185,7 @@ std::vector<std::vector<double>> run_all(std::unique_ptr<Stream<T>>& stream, T& 
 
 template <typename T>
 void check_solution(const size_t ntimes, std::vector<T>& a, std::vector<T>& b, std::vector<T>& c,
-		    T& sum);
+		    T& sum, std::vector<scan_t<T>>& s);
 
 // Generic run routine
 // Runs the kernel(s) and prints output.
@@ -251,12 +261,13 @@ void run()
     size_t nbytes = ARRAY_SIZE * sizeof(T);
     std::cout << std::setprecision(1) << std::fixed
 	      << "Array size: " << unit.fmt(nbytes) << " " << unit.str() << std::endl;
-    std::cout << "Total size: " << unit.fmt(3.0*nbytes) << " " << unit.str() << std::endl;
+    size_t narrays = will_run_scan()? 3+2 : 3;
+    std::cout << "Total size: " << unit.fmt((double)narrays*nbytes) << " " << unit.str() << std::endl;
     std::cout.precision(ss);
   }
 
-  std::unique_ptr<Stream<T>> stream = make_stream<T>(ARRAY_SIZE, deviceIndex);
-  auto initElapsedS = time([&] { stream->init_arrays(startA, startB, startC); });
+  std::unique_ptr<Stream<T>> stream = make_stream<T>(ARRAY_SIZE, deviceIndex, will_run_scan());
+  stream->init_arrays(startA, startB, startC);
 
   // Result of the Dot kernel, if used.
   T sum{};
@@ -264,27 +275,14 @@ void run()
 
   // Create & read host vectors:
   std::vector<T> a(ARRAY_SIZE), b(ARRAY_SIZE), c(ARRAY_SIZE);
-  auto readElapsedS = time([&] { stream->read_arrays(a, b, c); });
+  std::vector<scan_t<T>> s(will_run_scan()? ARRAY_SIZE : 0);
+  stream->read_arrays(a, b, c, s);
 
-  check_solution<T>(num_times, a, b, c, sum);
-  auto initBWps = fmt_bw(3, initElapsedS);
-  auto readBWps = fmt_bw(3, readElapsedS);
+  check_solution<T>(num_times, a, b, c, sum, s);
 
-  if (output_as_csv)
-  {
+  if (output_as_csv) {
     fmt_csv_header();
-    fmt_csv("Init", 1, ARRAY_SIZE, sizeof(T), initBWps, initElapsedS, initElapsedS, initElapsedS);
-    fmt_csv("Read", 1, ARRAY_SIZE, sizeof(T), readBWps, readElapsedS, readElapsedS, readElapsedS);
-  }
-  else
-  {
-    std::cout << "Init: "
-      << std::setw(7)
-      << initElapsedS << " s (=" << initBWps << " " << unit.str() << "/s" << ")" << std::endl;
-    std::cout << "Read: "
-      << std::setw(7)
-      << readElapsedS << " s (=" << readBWps << " " << unit.str() << "/s" << ")" << std::endl;
-
+  } else {
     std::cout
       << std::left << std::setw(12) << "Function"
       << std::left << std::setw(12) << (std::string(unit.str()) + "/s")
@@ -313,8 +311,8 @@ void run()
 }
 
 template <typename T>
-void check_solution(const size_t num_times,
-		    std::vector<T>& a, std::vector<T>& b, std::vector<T>& c, T& sum)
+void check_solution(const size_t num_times, std::vector<T>& a, std::vector<T>& b, std::vector<T>& c,
+		    T& sum, std::vector<scan_t<T>>& s)
 {
   // Generate correct solution
   T goldA = startA;
@@ -327,12 +325,19 @@ void check_solution(const size_t num_times,
   // Updates output due to running each benchmark:
   auto run = [&](int b) {
     switch(bench[b].id) {
+    case BenchId::Write:   goldA = startA; break;
     case BenchId::Copy:    goldC = goldA; break;
     case BenchId::Mul:     goldB = scalar * goldC; break;
     case BenchId::Add:     goldC = goldA + goldB; break;
     case BenchId::Triad:   goldA = goldB + scalar * goldC; break;
     case BenchId::Nstream: goldA += goldB + scalar * goldC; break;
-    case BenchId::Dot:     goldS = goldA * goldB * T(ARRAY_SIZE); break; // This calculates the answer exactly
+    // This calculates the answer exactly:
+    case BenchId::Dot:     goldS = goldA * goldB * T(ARRAY_SIZE); break;
+    // Scan is checked below:
+    case BenchId::Scan:    break;
+    // For read nothing can be checked::
+    case BenchId::Read:    break;
+
     default:
     std::cerr << "Unimplemented Check: " << bench[b].label << std::endl;
     abort();
@@ -382,10 +387,28 @@ void check_solution(const size_t num_times,
   T eS = std::fabs(sum - goldS) / std::fabs(goldS);
   for (size_t i = 0; i < num_benchmarks; ++i) {
     if (bench[i].id != BenchId::Dot) continue;
-    if (run_benchmark(bench[i]))
-      check("sum", sum,  goldS, eS);
-    break;
+    if (!run_benchmark(bench[i])) break;
+    check("sum", sum,  goldS, eS);
   }
+
+  // Scan
+  for (size_t i = 0; i < num_benchmarks; ++i) {
+    if (bench[i].id != BenchId::Scan) continue;
+    if (!run_benchmark(bench[i])) break;
+    // Check scan:
+    scan_t<T> prev = 0;
+    for (size_t i = 0; i < ARRAY_SIZE; ++i) {
+      if (s[i] == prev) {
+	prev += static_cast<scan_t<T>>(i);
+	continue;
+      }
+      ++failed;
+      if (failed > 10) return;
+      std::cerr << "FAILED validation of scan [" << i << "]: "
+		<< s[i] << " != " << prev << std::endl;
+    }
+  }
+
 
   // Calculate the L^infty-norm relative error
   for (size_t i = 0; i < a.size(); ++i) {

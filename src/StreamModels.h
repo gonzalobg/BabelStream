@@ -36,10 +36,10 @@
 #endif
 
 template <typename T>
-std::unique_ptr<Stream<T>> make_stream(intptr_t array_size, int deviceIndex) {
+std::unique_ptr<Stream<T>> make_stream(intptr_t array_size, int deviceIndex, const bool will_run_scan) {
 #if defined(CUDA)
   // Use the CUDA implementation
-  return std::make_unique<CUDAStream<T>>(array_size, deviceIndex);
+  return std::make_unique<CUDAStream<T>>(array_size, deviceIndex, will_run_scan);
 
 #elif defined(HIP)
   // Use the HIP implementation
