@@ -62,7 +62,10 @@ class HIPStream : public Stream<T>
     void triad() override;
     void nstream() override;
     T dot() override;
+    void read() override;
+    void write(T initA) override;
+    void scan() override;
 
-    void get_arrays(T const*& a, T const*& b, T const*& c) override;    
+    void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*&) override;    
     void init_arrays(T initA, T initB, T initC);
 };

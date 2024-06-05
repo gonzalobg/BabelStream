@@ -6,6 +6,8 @@
 
 #include "CUDAStream.h"
 #include <nvml.h>
+#include <thrust/scan.h>
+#include <thrust/execution_policy.h>
 
 #if !defined(UNROLL_FACTOR)
 #define UNROLL_FACTOR 4
@@ -128,7 +130,8 @@ CUDAStream<T>::CUDAStream(BenchId bs, const intptr_t array_size, const int devic
   // Size of partial sums for dot kernels
   size_t sums_bytes = sizeof(T) * dot_num_blocks;
   size_t array_bytes = sizeof(T) * array_size;
-  size_t total_bytes = array_bytes * size_t(3) + sums_bytes;
+  size_t scan_bytes = needs_buffer(bs, 's')? size_t(2) * array_size * sizeof(scan_t<T>) : 0;
+  size_t total_bytes = array_bytes * size_t(3) + scan_bytes + sums_bytes;
   std::cout << "Reduction kernel config: " << dot_num_blocks << " groups of (fixed) size " << TBSIZE_DOT << std::endl;
 
   // Check buffers fit on the device
@@ -144,6 +147,11 @@ CUDAStream<T>::CUDAStream(BenchId bs, const intptr_t array_size, const int devic
   d_c = alloc_device<T>(array_size);
   sums = alloc_host<T>(dot_num_blocks);
 
+  if (needs_buffer(bs, 's')) {
+    d_si = alloc_device<scan_t<T>>(array_size);
+    d_so = alloc_device<scan_t<T>>(array_size);
+  }
+
   // Initialize buffers:
   init_arrays(initA, initB, initC);
 }
@@ -156,6 +164,10 @@ CUDAStream<T>::~CUDAStream()
   free_device(d_b);
   free_device(d_c);
   free_host(sums);
+  if (d_si) {
+    free_device(d_si);
+    free_device(d_so);
+  }
 }
 
 template <typename F>
@@ -203,15 +215,18 @@ void for_each(size_t array_size, F f) {
 template <class T>
 void CUDAStream<T>::init_arrays(T initA, T initB, T initC)
 {
-  for_each(array_size, [=,a=d_a,b=d_b,c=d_c] __device__ (size_t i) {
+  for_each(array_size, [=,a=d_a,b=d_b,c=d_c,s=d_si] __device__ (size_t i) {
     a[i] = initA;
     b[i] = initB;
     c[i] = initC;
+    if (s) {
+      s[i] = static_cast<scan_t<T>>(i);
+    }
   });
 }
 
 template <class T>
-void CUDAStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
+void CUDAStream<T>::get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s)
 {
   CU(cudaStreamSynchronize(stream));
 #if defined(PAGEFAULT) || defined(MANAGED)
@@ -219,6 +234,7 @@ void CUDAStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
   a = d_a;
   b = d_b;
   c = d_c;
+  s = d_so;
 #else
   // No Unified memory: copy data to the host
   size_t nbytes = array_size * sizeof(T);
@@ -231,7 +247,14 @@ void CUDAStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
   CU(cudaMemcpy(h_a.data(), d_a, nbytes, cudaMemcpyDeviceToHost));
   CU(cudaMemcpy(h_b.data(), d_b, nbytes, cudaMemcpyDeviceToHost));
   CU(cudaMemcpy(h_c.data(), d_c, nbytes, cudaMemcpyDeviceToHost));
+  if (d_so) {
+    size_t nbytes = array_size * sizeof(scan_t<T>);
+    h_s.resize(array_size);  
+    s = h_s.data();
+    CU(cudaMemcpy(h_s.data(), d_so, nbytes, cudaMemcpyDeviceToHost));
+  }
 #endif
+  CU(cudaStreamSynchronize(stream));
 }
 
 template <class T>
@@ -306,6 +329,38 @@ T CUDAStream<T>::dot()
   for (intptr_t i = 0; i < dot_num_blocks; ++i) sum += sums[i];
 
   return sum;
+}
+
+template <class T>
+void CUDAStream<T>::scan()
+{
+  if (!d_so) {
+    std::cerr << "Trying to run scan but storage not allocated" << std::endl;
+    std::terminate();
+  }
+  thrust::exclusive_scan(thrust::cuda::par.on(stream), d_si, d_si + array_size, d_so);
+  CU(cudaPeekAtLastError());
+  CU(cudaStreamSynchronize(stream));
+}
+
+template <class T>
+void CUDAStream<T>::read()
+{
+  for_each(array_size, [a=d_a] __device__ (size_t i) {
+    T tmp = a[i];
+    // Control-dependency on loading a[i]: never true, but checking it requires loading value:
+    if (tmp == T(3.14)) {
+      a[i] *= 2;
+    }
+  });
+}
+
+template <class T>
+void CUDAStream<T>::write(T initA)
+{
+  for_each(array_size, [a=d_a, initA] __device__ (size_t i) {
+      a[i] = initA;
+  });
 }
 
 void listDevices(void)

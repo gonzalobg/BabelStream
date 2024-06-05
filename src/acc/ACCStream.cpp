@@ -5,6 +5,7 @@
 // For full license terms please see the LICENSE file distributed with this
 // source code
 
+#include <numeric>
 #include "ACCStream.h"
 
 template <class T>
@@ -23,6 +24,11 @@ ACCStream<T>::ACCStream(BenchId bs, const intptr_t array_size, const int device_
   T * restrict a = this->a;
   T * restrict b = this->b;
   T * restrict c = this->c;
+
+  if (needs_buffer(bs, 's')) {
+    s_i = new scan_t<T>[array_size];
+    s_o = new scan_t<T>[array_size];
+  }
 
   #pragma acc enter data create(a[0:array_size], b[0:array_size], c[0:array_size])
   {}
@@ -46,6 +52,11 @@ ACCStream<T>::~ACCStream()
   delete[] a;
   delete[] b;
   delete[] c;
+
+  if (s_i) {
+    delete[] s_i;
+    delete[] s_o;
+  }
 }
 
 template <class T>
@@ -62,10 +73,17 @@ void ACCStream<T>::init_arrays(T initA, T initB, T initC)
     b[i] = initB;
     c[i] = initC;
   }
+
+  if (s_i) {
+    for (intptr_t i = 0; i < array_size; i++)
+    {
+      s_i[i] = scan_t<T>(i);
+    }
+  }
 }
 
 template <class T>
-void ACCStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
+void ACCStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c, scan_t<T> const*& h_s)
 {
   T *a = this->a;
   T *b = this->b;
@@ -76,6 +94,10 @@ void ACCStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
   h_a = a;
   h_b = b;
   h_c = c;
+
+  if (s_o) {
+    h_s = s_o;
+  }
 }
 
 template <class T>
@@ -167,6 +189,44 @@ T ACCStream<T>::dot()
   }
 
   return sum;
+}
+
+template <class T>
+void ACCStream<T>::read()
+{
+  intptr_t array_size = this->array_size;
+  T * restrict a = this->a;
+  #pragma acc parallel loop present(a[0:array_size]) wait
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    T tmp = a[i];
+    if (tmp == T(3.14)) {
+      a[i] *= 2;;
+    }
+  }
+}
+
+template <class T>
+void ACCStream<T>::write(T initA)
+{
+  intptr_t array_size = this->array_size;
+  T * restrict a = this->a;
+  #pragma acc parallel loop present(a[0:array_size]) wait
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    a[i] = initA;
+  }
+}
+
+template <class T>
+void ACCStream<T>::scan()
+{
+  if (!s_i) {
+    throw std::runtime_error("Trying to run scan but storage not allocated");
+  }
+  
+  // OpenAcc doesn't have scan; run sequentially
+  std::exclusive_scan(s_i, s_i + array_size, s_o, scan_t<T>(0));
 }
 
 void listDevices(void)

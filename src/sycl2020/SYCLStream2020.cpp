@@ -18,6 +18,9 @@ template <class T>
 SYCLStream<T>::SYCLStream(BenchId bs, const intptr_t array_size, const int device_index,
 			  T initA, T initB, T initC)
   : array_size(array_size)
+  #ifdef ACCESSOR
+  , d_a{array_size}, d_b{array_size}, d_c{array_size}, d_sum{1}
+  #endif
 {
   if (!cached)
     getDeviceList();
@@ -62,18 +65,11 @@ SYCLStream<T>::SYCLStream(BenchId bs, const intptr_t array_size, const int devic
   }});
 
   // Allocate memory
-  #ifdef SYCL2020ACC
-  d_a = sycl::buffer<T>{array_size};
-  d_b = sycl::buffer<T>{array_size};
-  d_c = sycl::buffer<T>{array_size};
-  d_sum = sycl::buffer<T>{1};
-  #elif SYCL2020USM
+  #ifdef USM
   a = sycl::malloc_shared<T>(array_size, *queue);
   b = sycl::malloc_shared<T>(array_size, *queue);
   c = sycl::malloc_shared<T>(array_size, *queue);
   sum = sycl::malloc_shared<T>(1, *queue);
-  #else
-  #error unimplemented
   #endif
   
   // No longer need list of devices
@@ -85,7 +81,7 @@ SYCLStream<T>::SYCLStream(BenchId bs, const intptr_t array_size, const int devic
 
 template<class T>
 SYCLStream<T>::~SYCLStream() {
-#ifdef SYCL2020USM
+#ifdef USM
   sycl::free(a, *queue);
   sycl::free(b, *queue);
   sycl::free(c, *queue);
@@ -98,7 +94,7 @@ void SYCLStream<T>::copy()
 {
   queue->submit([&](sycl::handler &cgh)
   {
-#ifdef SYCL2020ACC
+#ifdef ACCESSOR
     sycl::accessor a {d_a, cgh, sycl::read_only};
     sycl::accessor c {d_c, cgh, sycl::write_only};
 #endif    
@@ -116,7 +112,7 @@ void SYCLStream<T>::mul()
   const T scalar = startScalar;
   queue->submit([&](sycl::handler &cgh)
   {
-#ifdef SYCL2020ACC
+#ifdef ACCESSOR
     sycl::accessor b {d_b, cgh, sycl::write_only};
     sycl::accessor c {d_c, cgh, sycl::read_only};
 #endif    
@@ -133,7 +129,7 @@ void SYCLStream<T>::add()
 {
   queue->submit([&](sycl::handler &cgh)
   {
-#ifdef SYCL2020ACC
+#ifdef ACCESSOR
     sycl::accessor a {d_a, cgh, sycl::read_only};
     sycl::accessor b {d_b, cgh, sycl::read_only};
     sycl::accessor c {d_c, cgh, sycl::write_only};
@@ -152,7 +148,7 @@ void SYCLStream<T>::triad()
   const T scalar = startScalar;
   queue->submit([&](sycl::handler &cgh)
   {
-#ifdef SYCL2020ACC    
+#ifdef ACCESSOR
     sycl::accessor a {d_a, cgh, sycl::write_only};
     sycl::accessor b {d_b, cgh, sycl::read_only};
     sycl::accessor c {d_c, cgh, sycl::read_only};
@@ -171,7 +167,7 @@ void SYCLStream<T>::nstream()
   const T scalar = startScalar;
   queue->submit([&](sycl::handler &cgh)
   {
-#if SYCL2020ACC
+#if ACCESSOR
     sycl::accessor a {d_a, cgh};
     sycl::accessor b {d_b, cgh, sycl::read_only};
     sycl::accessor c {d_c, cgh, sycl::read_only};
@@ -189,7 +185,7 @@ T SYCLStream<T>::dot()
 {
   queue->submit([&](sycl::handler &cgh)
   {
-#if SYCL2020ACC    
+#if ACCESSOR
     sycl::accessor a {d_a, cgh, sycl::read_only};
     sycl::accessor b {d_b, cgh, sycl::read_only};
 #endif
@@ -215,7 +211,7 @@ void SYCLStream<T>::init_arrays(T initA, T initB, T initC)
 {
   queue->submit([&](sycl::handler &cgh)
   {
-#if SYCL2020ACC    
+#if ACCESSOR
     sycl::accessor a {d_a, cgh, sycl::write_only, sycl::no_init};
     sycl::accessor b {d_b, cgh, sycl::write_only, sycl::no_init};
     sycl::accessor c {d_c, cgh, sycl::write_only, sycl::no_init};
@@ -231,9 +227,9 @@ void SYCLStream<T>::init_arrays(T initA, T initB, T initC)
 }
 
 template <class T>
-void SYCLStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
+void SYCLStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c, scan_t<T> const*&)
 {
-#if SYCL2020ACC
+#if ACCESSOR
   sycl::host_accessor a {d_a, sycl::read_only};
   sycl::host_accessor b {d_b, sycl::read_only};
   sycl::host_accessor c {d_c, sycl::read_only};
@@ -241,6 +237,24 @@ void SYCLStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
   h_a = &a[0];
   h_b = &b[0];
   h_c = &c[0];
+}
+
+template <class T>
+void SYCLStream<T>::read()
+{
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void SYCLStream<T>::write(T initA)
+{
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void SYCLStream<T>::scan()
+{
+  throw std::runtime_error("unimplemented");
 }
 
 void getDeviceList(void)

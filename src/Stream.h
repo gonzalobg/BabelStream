@@ -11,9 +11,14 @@
 #include <array>
 #include <vector>
 #include <string>
+#include <type_traits>
 #include "benchmark.h"
 
 using std::intptr_t;
+
+template <typename T>
+using scan_t = std::conditional_t<sizeof(T) == 4, std::uint32_t,
+               std::conditional_t<sizeof(T) == 8, std::uint64_t, void>>;
 
 template <class T>
 class Stream
@@ -29,9 +34,12 @@ class Stream
     virtual void triad() = 0;
     virtual void nstream() = 0;
     virtual T dot() = 0;
+    virtual void read() = 0;
+    virtual void write(T initA) = 0;
+    virtual void scan() = 0;
 
     // Set pointers to read from arrays
-    virtual void get_arrays(T const*& a, T const*& b, T const*& c) = 0;
+    virtual void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s) = 0;
 };
 
 // Implementation specific device functions

@@ -27,9 +27,12 @@ class ThrustStream : public Stream<T>
 
   #if defined(MANAGED)
     thrust::universal_vector<T> a, b, c;
+    thrust::universal_vector<scan_t<T>> si, so;
   #else
     thrust::device_vector<T> a, b, c;
+    thrust::device_vector<T> si, so;
     std::vector<T> h_a, h_b, h_c;
+    std::vector<scan_t<T>> h_s;
   #endif
 
   public:
@@ -43,8 +46,11 @@ class ThrustStream : public Stream<T>
     void triad() override;
     void nstream() override;
     T dot() override;
+    void read() override;
+    void write(T initA) override;
+    void scan() override;
 
-    void get_arrays(T const*& a, T const*& b, T const*& c) override;
+    void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*&) override;  
     void init_arrays(T initA, T initB, T initC);
 };
 

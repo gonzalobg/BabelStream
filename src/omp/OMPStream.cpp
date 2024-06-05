@@ -21,6 +21,10 @@ OMPStream<T>::OMPStream(BenchId bs, const intptr_t array_size, const int device,
   this->a = (T*)aligned_alloc(ALIGNMENT, sizeof(T)*array_size);
   this->b = (T*)aligned_alloc(ALIGNMENT, sizeof(T)*array_size);
   this->c = (T*)aligned_alloc(ALIGNMENT, sizeof(T)*array_size);
+  if (needs_buffer(bs, 's')) {
+    this->si = (scan_t<T>*)aligned_alloc(ALIGNMENT, sizeof(scan_t<T>)*array_size);
+    this->so = (scan_t<T>*)aligned_alloc(ALIGNMENT, sizeof(scan_t<T>)*array_size);
+  }
 
 #ifdef OMP_TARGET_GPU
   omp_set_default_device(device);
@@ -30,6 +34,14 @@ OMPStream<T>::OMPStream(BenchId bs, const intptr_t array_size, const int device,
   // Set up data region on device
   #pragma omp target enter data map(alloc: a[0:array_size], b[0:array_size], c[0:array_size])
   {}
+
+  if (si) {
+    scan_t<T> *si = this->si;
+    scan_t<T> *so = this->so;
+    #pragma omp target enter data map(alloc: si[0:array_size], so[0:array_size])
+    {}
+  }
+
 #endif
 
   init_arrays(initA, initB, initC);
@@ -41,15 +53,26 @@ OMPStream<T>::~OMPStream()
 #ifdef OMP_TARGET_GPU
   // End data region on device
   intptr_t array_size = this->array_size;
+  if (si) {
+    scan_t<T> *si = this->si;
+    scan_t<T> *so = this->so;  
+    #pragma omp target exit data map(release:si[0:array_size], so[0:array_size])
+    {}
+  }
+
   T *a = this->a;
   T *b = this->b;
   T *c = this->c;
-  #pragma omp target exit data map(release: a[0:array_size], b[0:array_size], c[0:array_size])
+  #pragma omp target exit data map(release: a[0:array_size], b[0:array_size], c[0:array_size], si[0:array_size], so[0:array_size])
   {}
 #endif
   free(a);
   free(b);
   free(c);
+  if (si) {
+    free(si);
+    free(so);
+  }
 }
 
 template <class T>
@@ -60,6 +83,8 @@ void OMPStream<T>::init_arrays(T initA, T initB, T initC)
   T *a = this->a;
   T *b = this->b;
   T *c = this->c;
+  scan_t<T> *si = this->si;
+  scan_t<T> *so = this->so;  
   #pragma omp target teams distribute parallel for simd
 #else
   #pragma omp parallel for
@@ -69,6 +94,10 @@ void OMPStream<T>::init_arrays(T initA, T initB, T initC)
     a[i] = initA;
     b[i] = initB;
     c[i] = initC;
+    if (si) {
+      si[i] = i;
+      so[i] = 0;
+    }
   }
   #if defined(OMP_TARGET_GPU) && defined(_CRAYC)
   // If using the Cray compiler, the kernels do not block, so this update forces
@@ -78,19 +107,21 @@ void OMPStream<T>::init_arrays(T initA, T initB, T initC)
 }
 
 template <class T>
-void OMPStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
+void OMPStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c, scan_t<T> const*& h_s)
 {
 
 #ifdef OMP_TARGET_GPU
   T *a = this->a;
   T *b = this->b;
   T *c = this->c;
-  #pragma omp target update from(a[0:array_size], b[0:array_size], c[0:array_size])
+  scan_t<T> *so = this->so;  
+  #pragma omp target update from(a[0:array_size], b[0:array_size], c[0:array_size], so[0:array_size])
   {}
 #endif
   h_a = a;
   h_b = b;
   h_c = c;
+  h_s = so;
 }
 
 template <class T>
@@ -233,7 +264,79 @@ T OMPStream<T>::dot()
   return sum;
 }
 
+template <class T>
+void OMPStream<T>::read()
+{
+#ifdef OMP_TARGET_GPU
+  intptr_t array_size = this->array_size;
+  T *a = this->a;
+  #pragma omp target teams distribute parallel for simd
+#else
+  #pragma omp parallel for
+#endif
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    T tmp = a[i];
+    // Control-dependency on loading a[i]: never true, but checking it requires loading value:
+    if (tmp == T(3.14)) {
+      a[i] *= 2;
+    }
+  }
+  #if defined(OMP_TARGET_GPU) && defined(_CRAYC)
+  // If using the Cray compiler, the kernels do not block, so this update forces
+  // a small copy to ensure blocking so that timing is correct
+  #pragma omp target update from(a[0:0])
+  #endif
+}
 
+template <class T>
+void OMPStream<T>::write(T initA)
+{
+#ifdef OMP_TARGET_GPU
+  intptr_t array_size = this->array_size;
+  T *a = this->a;
+  #pragma omp target teams distribute parallel for simd
+#else
+  #pragma omp parallel for
+#endif
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    a[i] = initA;    
+  }
+  #if defined(OMP_TARGET_GPU) && defined(_CRAYC)
+  // If using the Cray compiler, the kernels do not block, so this update forces
+  // a small copy to ensure blocking so that timing is correct
+  #pragma omp target update from(a[0:0])
+  #endif
+}
+
+template <class T>
+void OMPStream<T>::scan()
+{
+  if(!si) {
+    throw std::runtime_error("attempting to run scan without allocating si first");
+  }
+  scan_t<T> s(0);
+#ifdef OMP_TARGET_GPU
+  intptr_t array_size = this->array_size;
+  scan_t<T> *si = this->si;
+  scan_t<T> *so = this->so;
+  #pragma omp target teams distribute parallel for simd map(to: s) reduction(inscan, +:s)
+#else
+  #pragma omp parallel for reduction(inscan, +:s)
+#endif
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    so[i] = s;
+    #pragma omp scan exclusive(s)
+    s += si[i];
+  }
+  #if defined(OMP_TARGET_GPU) && defined(_CRAYC)
+  // If using the Cray compiler, the kernels do not block, so this update forces
+  // a small copy to ensure blocking so that timing is correct
+  #pragma omp target update from(a[0:0])
+  #endif
+}
 
 void listDevices(void)
 {

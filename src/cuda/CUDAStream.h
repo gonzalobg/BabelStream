@@ -35,6 +35,10 @@ class CUDAStream : public Stream<T>
 
     // If UVM is disabled, host arrays for verification purposes
     std::vector<T> h_a, h_b, h_c;
+    std::vector<scan_t<T>> h_s;
+
+    // Allocate memory for scan
+    scan_t<T> *d_si, *d_so;
 
     // Number of blocks for dot kernel
     intptr_t dot_num_blocks;
@@ -50,7 +54,10 @@ class CUDAStream : public Stream<T>
     void triad() override;
     void nstream() override;
     T dot() override;
+    void read() override;
+    void write(T initA) override;
+    void scan() override;
 
-    void get_arrays(T const*& a, T const*& b, T const*& c) override;
+    void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s) override;
     void init_arrays(T initA, T initB, T initC);
 };

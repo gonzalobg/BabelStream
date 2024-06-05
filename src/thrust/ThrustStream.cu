@@ -7,7 +7,10 @@
 #include "ThrustStream.h"
 #include <thrust/inner_product.h>
 #include <thrust/device_vector.h>
+#include <thrust/scan.h>
+#include <thrust/for_each.h>
 #include <thrust/iterator/zip_iterator.h>
+#include <thrust/sequence.h>
 #include <thrust/zip_function.h>
 
 static inline void synchronise()
@@ -47,6 +50,11 @@ ThrustStream<T>::ThrustStream(BenchId bs, const intptr_t array_size, const int d
 
 #endif
 
+  if (needs_buffer(bs, 's')) {
+    si.resize(array_size);
+    so.resize(array_size);
+  }
+
   init_arrays(initA, initB, initC);
 }
 
@@ -56,16 +64,21 @@ void ThrustStream<T>::init_arrays(T initA, T initB, T initC)
   thrust::fill(a.begin(), a.end(), initA);
   thrust::fill(b.begin(), b.end(), initB);
   thrust::fill(c.begin(), c.end(), initC);
+  if (!si.empty()) {
+    thrust::sequence(si.begin(), si.end());
+    thrust::fill(so.begin(), so.end(), scan_t<T>(0));
+  }
   synchronise();
 }
 
 template <class T>
-void ThrustStream<T>::get_arrays(T const*& a_, T const*& b_, T const*& c_)
+void ThrustStream<T>::get_arrays(T const*& a_, T const*& b_, T const*& c_, scan_t<T> const*& s_)
 {
   #if defined(MANAGED)
   a_ = &*a.data();
   b_ = &*b.data();
   c_ = &*c.data();
+  if (!si.empty()) s_ = &*so.data();
   #else
   h_a.resize(array_size);
   h_b.resize(array_size);
@@ -76,6 +89,11 @@ void ThrustStream<T>::get_arrays(T const*& a_, T const*& b_, T const*& c_)
   a_ = h_a.data();
   b_ = h_b.data();
   c_ = h_c.data();
+  if (!si.empty()) {
+    h_s.resize(array_size);
+    thrust::copy(so.begin(), so.end(), h_s.begin());
+    s_ = h_s.data();
+  }
   #endif
 }
 
@@ -153,6 +171,36 @@ T ThrustStream<T>::dot()
 {
   return thrust::inner_product(a.begin(), a.end(), b.begin(), T{});
 }
+
+template <class T>
+void ThrustStream<T>::read()
+{
+  auto a_ = thrust::raw_pointer_cast(a.data());
+  thrust::for_each_n(a.begin(), array_size, [=] __device__ __host__ (T& e) {
+    auto i = &e - a_;
+    T tmp = a_[i];
+    if (tmp == T(3.14)) {
+      a_[i] *= 2;;
+    }
+  });
+}
+
+template <class T>
+void ThrustStream<T>::write(T initA)
+{
+  auto a_ = thrust::raw_pointer_cast(a.data());
+  thrust::for_each_n(a.begin(), array_size, [=] __device__ __host__ (T& e) {
+    auto i = &e - a_;
+    a_[i] = initA;
+  });
+}
+
+template <class T>
+void ThrustStream<T>::scan()
+{
+  thrust::exclusive_scan(si.begin(), si.end(), so.begin(), scan_t<T>(0));
+}
+
 
 #if THRUST_DEVICE_SYSTEM == THRUST_DEVICE_SYSTEM_CUDA || \
     (defined(THRUST_DEVICE_SYSTEM_HIP) && THRUST_DEVICE_SYSTEM_HIP == THRUST_DEVICE_SYSTEM)

@@ -24,6 +24,13 @@ KokkosStream<T>::KokkosStream(BenchId bs, const intptr_t array_size, const int d
   *hm_b = create_mirror_view(*d_b);
   *hm_c = create_mirror_view(*d_c);
 
+  if (needs_buffer(bs, 's')) {
+    d_si = new Kokkos::View<scan_t<T>*>(Kokkos::ViewAllocateWithoutInitializing("d_si"), array_size);
+    d_so = new Kokkos::View<scan_t<T>*>(Kokkos::ViewAllocateWithoutInitializing("d_so"), array_size);
+    hm_so = new typename Kokkos::View<scan_t<T>*>::HostMirror();
+    *hm_so = create_mirror_view(*d_so);
+  }
+  
   init_arrays(initA, initB, initC);
 }
 
@@ -45,11 +52,18 @@ void KokkosStream<T>::init_arrays(T initA, T initB, T initC)
     b[index] = initB;
     c[index] = initC;
   });
+  if (d_si) {
+    Kokkos::View<scan_t<T>*> si(*d_si);
+    Kokkos::parallel_for(array_size, KOKKOS_LAMBDA (const long index)
+    {
+      si[index] = index;
+    });
+  }
   Kokkos::fence();
 }
 
 template <class T>
-void KokkosStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
+void KokkosStream<T>::get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s)
 {
   deep_copy(*hm_a, *d_a);
   deep_copy(*hm_b, *d_b);
@@ -57,13 +71,16 @@ void KokkosStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
   a = hm_a->data();
   b = hm_b->data();
   c = hm_c->data();
+  if (d_so) {
+    deep_copy(*hm_so, *d_so);
+    s = hm_so->data();
+  }
 }
 
 template <class T>
 void KokkosStream<T>::copy()
 {
   Kokkos::View<T*> a(*d_a);
-  Kokkos::View<T*> b(*d_b);
   Kokkos::View<T*> c(*d_c);
 
   Kokkos::parallel_for(array_size, KOKKOS_LAMBDA (const long index)
@@ -146,8 +163,51 @@ T KokkosStream<T>::dot()
   }, sum);
 
   return sum;
-
 }
+
+template <class T>
+void KokkosStream<T>::read()
+{
+  Kokkos::View<T*> a(*d_a);
+  Kokkos::parallel_for(array_size, KOKKOS_LAMBDA (const long index)
+  {
+    T tmp = a[index];
+    // Control-dependency on loading a[i]: never true, but checking it requires loading value:
+    if (tmp == T(3.14)) {
+      a[index] *= 2;
+    }
+  });
+  Kokkos::fence();
+}
+
+template <class T>
+void KokkosStream<T>::write(T initA)
+{
+  Kokkos::View<T*> a(*d_a);
+  Kokkos::parallel_for(array_size, KOKKOS_LAMBDA (const long index)
+  {
+    a[index] = initA;
+  });
+  Kokkos::fence();
+}
+
+template <class T>
+void KokkosStream<T>::scan()
+{
+  if (!d_so) {
+    std::cerr << "Trying to run scan but storage not allocated" << std::endl;
+    std::terminate();
+  }
+  Kokkos::View<scan_t<T>*> si(*d_si);
+  Kokkos::View<scan_t<T>*> so(*d_so);
+  Kokkos::parallel_scan(array_size, KOKKOS_LAMBDA (const long index, scan_t<T>& partial_sum, bool is_final)
+  {
+    if (is_final) so[index] = partial_sum;
+    partial_sum += si[index];
+  });
+  Kokkos::fence();
+}
+
 
 void listDevices(void)
 {

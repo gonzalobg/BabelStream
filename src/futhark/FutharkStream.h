@@ -40,12 +40,10 @@ protected:
   struct futhark_context *ctx;
 
   // Device side arrays
-  void* a;
-  void* b;
-  void* c;
+  void *a = nullptr, *b = nullptr, *c = nullptr, *s_i = nullptr, *s_o = nullptr;
 
   // Host side arrays for verification
-  std::vector<T> h_a, h_b, h_c;
+  std::vector<T> h_a, h_b, h_c, h_s;
 
 public:
   FutharkStream(BenchId bs, const intptr_t array_size, const int device_id,
@@ -58,7 +56,10 @@ public:
   void triad() override;
   void nstream() override;
   T dot() override;
+  void read() override { throw std::runtime_error("unimplemented"); };
+  void write(T initA) override { throw std::runtime_error("unimplemented"); };
+  void scan() override { throw std::runtime_error("unimplemented"); };
 
-  void get_arrays(T const*& a, T const*& b, T const*& c) override;  
+  void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s) override;
   void init_arrays(T initA, T initB, T initC);
 };

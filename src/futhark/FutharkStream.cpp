@@ -100,7 +100,7 @@ void FutharkStream<double>::init_arrays(double initA, double initB, double initC
 }
 
 template <>
-void FutharkStream<float>::get_arrays(float const*& a_, float const*& b_, float const*& c_) {
+void FutharkStream<float>::get_arrays(float const*& a_, float const*& b_, float const*& c_, scan_t<float> const*&) {
   h_a.resize(array_size);
   h_b.resize(array_size);
   h_c.resize(array_size);
@@ -114,7 +114,7 @@ void FutharkStream<float>::get_arrays(float const*& a_, float const*& b_, float 
 }
 
 template <>
-void FutharkStream<double>::get_arrays(double const*& a_, double const*& b_, double const*& c_) {
+void FutharkStream<double>::get_arrays(double const*& a_, double const*& b_, double const*& c_, scan_t<double> const*&) {
   h_a.resize(array_size);
   h_b.resize(array_size);
   h_c.resize(array_size);

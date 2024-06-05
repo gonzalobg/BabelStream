@@ -240,7 +240,7 @@ void SYCLStream<T>::init_arrays(T initA, T initB, T initC)
 }
 
 template <class T>
-void SYCLStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
+void SYCLStream<T>::get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*&)
 {
   auto _a = d_a->template get_access<access::mode::read>();
   auto _b = d_b->template get_access<access::mode::read>();
@@ -276,6 +276,24 @@ void listDevices(void)
     }
     std::cout << std::endl;
   }
+}
+
+template <class T>
+void SYCLStream<T>::read()
+{
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void SYCLStream<T>::write(T initA)
+{
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void SYCLStream<T>::scan()
+{
+  throw std::runtime_error("unimplemented");
 }
 
 std::string getDeviceName(const int device)

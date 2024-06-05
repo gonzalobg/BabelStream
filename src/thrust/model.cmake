@@ -35,7 +35,7 @@ register_flag_optional(CUDA_EXTRA_FLAGS
 
 
 macro(setup)
-    set(CMAKE_CXX_STANDARD 14)
+    set(CMAKE_CXX_STANDARD 17)
     if (MANAGED)
       register_definitions(MANAGED)
     endif ()

@@ -57,7 +57,7 @@ void TBBStream<T>::init_arrays(T initA, T initB, T initC)
 }
 
 template <class T>
-void TBBStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
+void TBBStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c, scan_t<T> const*& h_s)
 {
 #ifdef USE_VECTOR
   h_a = a.data();
@@ -142,6 +142,24 @@ T TBBStream<T>::dot()
       }
       return acc;
     }, std::plus<T>(), partitioner);
+}
+
+template <class T>
+void TBBStream<T>::read()
+{
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void TBBStream<T>::write(T initA)
+{
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void TBBStream<T>::scan()
+{
+  throw std::runtime_error("unimplemented");
 }
 
 void listDevices(void)

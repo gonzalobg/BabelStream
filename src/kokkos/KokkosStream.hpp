@@ -22,12 +22,10 @@ class KokkosStream : public Stream<T>
     intptr_t array_size;
 
     // Device side pointers to arrays
-    typename Kokkos::View<T*>* d_a;
-    typename Kokkos::View<T*>* d_b;
-    typename Kokkos::View<T*>* d_c;
-    typename Kokkos::View<T*>::HostMirror* hm_a;
-    typename Kokkos::View<T*>::HostMirror* hm_b;
-    typename Kokkos::View<T*>::HostMirror* hm_c;
+    typename Kokkos::View<T*>* d_a = nullptr, *d_b = nullptr, *d_c = nullptr;
+    typename Kokkos::View<scan_t<T>*>* d_si = nullptr, *d_so = nullptr;
+    typename Kokkos::View<T*>::HostMirror* hm_a, *hm_b, *hm_c;
+    typename Kokkos::View<scan_t<T>*>::HostMirror* hm_so;  
 
   public:
 
@@ -41,8 +39,11 @@ class KokkosStream : public Stream<T>
     void triad() override;
     void nstream() override;
     T dot() override;
+    void read() override;
+    void write(T initA) override;
+    void scan() override;
 
-    void get_arrays(T const*& a, T const*& b, T const*& c) override;
+    void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s) override;
     void init_arrays(T initA, T initB, T initC);
 };
 

@@ -15,7 +15,7 @@
 // - Classic: 5 classic kernels: Copy, Mul, Add, Triad, Dot.
 // - All: all kernels.
 // - Individual kernels only.
-enum class BenchId : int {Copy, Mul, Add, Triad, Nstream, Dot, Classic, All};
+enum class BenchId : int {Write, Copy, Mul, Add, Triad, Dot, Nstream, Scan, Read, Classic, All};
 
 struct Benchmark {
   BenchId id;
@@ -28,14 +28,17 @@ struct Benchmark {
 };
 
 // Benchmarks in the order in which - if present - should be run for validation purposes:
-constexpr size_t num_benchmarks = 6;
-constexpr std::array<Benchmark, num_benchmarks> bench = {
+constexpr size_t num_benchmarks = 9;
+inline constexpr std::array<Benchmark, num_benchmarks> bench = {
+  Benchmark { .id = BenchId::Write,   .label = "Write",   .weight = 1, .classic = false },
   Benchmark { .id = BenchId::Copy,    .label = "Copy",    .weight = 2, .classic = true  },
   Benchmark { .id = BenchId::Mul,     .label = "Mul",     .weight = 2, .classic = true  },
   Benchmark { .id = BenchId::Add,     .label = "Add",     .weight = 3, .classic = true  },
   Benchmark { .id = BenchId::Triad,   .label = "Triad",   .weight = 3, .classic = true  },
   Benchmark { .id = BenchId::Dot,     .label = "Dot",     .weight = 2, .classic = true  },
-  Benchmark { .id = BenchId::Nstream, .label = "Nstream", .weight = 4, .classic = false }
+  Benchmark { .id = BenchId::Nstream, .label = "Nstream", .weight = 4, .classic = false },
+  Benchmark { .id = BenchId::Scan,    .label = "Scan",    .weight = 2, .classic = false },
+  Benchmark { .id = BenchId::Read,    .label = "Read",    .weight = 1, .classic = false }
 };
 
 // Which buffers are needed by each benchmark
@@ -44,14 +47,17 @@ inline bool needs_buffer(BenchId id, char n) {
     return std::find(values.begin(), values.end(), n) != values.end();
   };
   switch(id) {
-  case BenchId::All:     return in({'a','b','c'});       
-  case BenchId::Classic: return in({'a','b','c'});   
+  case BenchId::All:     return in({'a','b','c', 's'});
+  case BenchId::Classic: return in({'a','b','c'});
   case BenchId::Copy:    return in({'a','c'});
   case BenchId::Mul:	 return in({'b','c'});
   case BenchId::Add:	 return in({'a','b','c'});
   case BenchId::Triad:   return in({'a','b','c'});
   case BenchId::Dot:	 return in({'a','b'});
-  case BenchId::Nstream: return in({'a','b','c'});  
+  case BenchId::Nstream: return in({'a','b','c'});
+  case BenchId::Read:    return in({'a'});
+  case BenchId::Write:   return in({'a'});
+  case BenchId::Scan:    return in({'s'});
   default:
     std::cerr << "Unknown benchmark" << std::endl;
     abort();

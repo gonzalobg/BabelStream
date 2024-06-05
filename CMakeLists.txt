@@ -31,8 +31,8 @@ endmacro()
 # the final executable name
 set(EXE_NAME babelstream)
 
-# for chrono, make_unique, and some basic CXX features, models can overwrite this if required
-set(CMAKE_CXX_STANDARD 14)
+# for chrono, make_unique, exclusive_scan_, and other basic features, models can override if required
+set(CMAKE_CXX_STANDARD 17)
 
 if (NOT CMAKE_BUILD_TYPE)
     message("No CMAKE_BUILD_TYPE specified, defaulting to 'Release'")
@@ -177,10 +177,13 @@ else ()
     message(STATUS "Selected model  :  ${MODEL}")
 endif ()
 
-if (MODEL STREQUAL "sycl2020")
+if (MODEL STREQUAL "sycl2020-acc")
     message(FATAL_ERROR "
-    Model sycl2020 has been renamed to sycl2020-acc, and a new sycl2020-usm model is now available.
-    Please use sycl2020-acc for SYCL2020 style accessors and sycl2020-usm for USM")
+    Model sycl2020-acc has been renamed to sycl2020 and may be enabled with the -DSYCL_ACCESS=ACCESSOR cmake option.")
+endif ()
+if (MODEL STREQUAL "sycl2020-usm")
+    message(FATAL_ERROR "
+    Model sycl2020-usm has been renamed to sycl2020 and may be enabled with the -DSYCL_ACCESS=USM cmake option.")
 endif ()
 
 # load the $MODEL.cmake file and setup the correct IMPL_* based on $MODEL

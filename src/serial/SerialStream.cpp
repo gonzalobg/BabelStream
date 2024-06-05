@@ -21,6 +21,10 @@ SerialStream<T>::SerialStream(BenchId bs, const intptr_t array_size, const int d
   this->a = (T*)aligned_alloc(ALIGNMENT, sizeof(T)*array_size);
   this->b = (T*)aligned_alloc(ALIGNMENT, sizeof(T)*array_size);
   this->c = (T*)aligned_alloc(ALIGNMENT, sizeof(T)*array_size);
+  if (needs_buffer(bs, 's')) {
+    this->si = (scan_t<T>*)aligned_alloc(ALIGNMENT, sizeof(scan_t<T>)*array_size);
+    this->so = (scan_t<T>*)aligned_alloc(ALIGNMENT, sizeof(scan_t<T>)*array_size);
+  }
 
   init_arrays(initA, initB, initC);
 }
@@ -31,6 +35,10 @@ SerialStream<T>::~SerialStream()
   free(a);
   free(b);
   free(c);
+  if (si) {
+    free(si);
+    free(so);
+  }
 }
 
 template <class T>
@@ -42,15 +50,19 @@ void SerialStream<T>::init_arrays(T initA, T initB, T initC)
     a[i] = initA;
     b[i] = initB;
     c[i] = initC;
+    if (si) {
+      si[i] = i;
+    }
   }
 }
 
 template <class T>
-void SerialStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
+void SerialStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c, scan_t<T> const*& h_s)
 {
   h_a = a;
   h_b = b;
   h_c = c;
+  h_s = so;
 }
 
 template <class T>
@@ -112,7 +124,38 @@ T SerialStream<T>::dot()
   return sum;
 }
 
+template <class T>
+void SerialStream<T>::read()
+{
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    T tmp = a[i];
+    // Control-dependency on loading a[i]: never true, but checking it requires loading value:
+    if (tmp == T(3.14)) {
+      a[i] *= 2;
+    }
+  }
+}
 
+template <class T>
+void SerialStream<T>::write(T initA)
+{
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    a[i] = initA;
+  }
+}
+
+template <class T>
+void SerialStream<T>::scan()
+{
+  scan_t<T> s = 0;
+  for (intptr_t i = 0; i < array_size; i++)
+  {
+    so[i] = s;
+    s += si[i];
+  }
+}
 
 void listDevices(void)
 {

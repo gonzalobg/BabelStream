@@ -58,7 +58,12 @@ STDStream<T>::STDStream(BenchId bs, const intptr_t array_size, const int device_
 
 #ifdef WORKAROUND
     std::cout << "Non-conforming implementation: requires non-portable workarounds to run STREAM" << std::endl;
-#endif      
+#endif
+
+    if (needs_buffer(bs, 's')) {
+      si = alloc_raw<scan_t<T>>(array_size);
+      so = alloc_raw<scan_t<T>>(array_size);
+    }
     init_arrays(initA, initB, initC);
 }
 
@@ -67,6 +72,10 @@ STDStream<T>::~STDStream() {
   dealloc_raw(a);
   dealloc_raw(b);
   dealloc_raw(c);
+  if (si) {
+    dealloc_raw(si);
+    dealloc_raw(so);
+  }
 }
 
 template <class T>
@@ -75,14 +84,22 @@ void STDStream<T>::init_arrays(T initA, T initB, T initC)
   std::fill_n(exe_policy, a, array_size, initA);
   std::fill_n(exe_policy, b, array_size, initB);
   std::fill_n(exe_policy, c, array_size, initC);
+  if (si) {
+    std::for_each(exe_policy, si, si+array_size, [si=si](scan_t<T>& e) {
+      auto i = &e - si;
+      e = scan_t<T>(i);
+    });
+    std::fill_n(exe_policy, so, array_size, scan_t<T>(0));
+  }
 }
 
 template <class T>
-void STDStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c)
+void STDStream<T>::get_arrays(T const*& h_a, T const*& h_b, T const*& h_c, scan_t<T> const*& h_s)
 {
   h_a = a;
   h_b = b;
   h_c = c;
+  h_s = so;
 }
 
 template <class T>
@@ -190,6 +207,49 @@ T STDStream<T>::dot()
   #error unimplemented
 #endif
 }
+
+template <class T>
+void STDStream<T>::read()
+{
+  #ifdef INDICES
+  std::for_each_n(exe_policy, counting_iter(0), array_size, [a=a](intptr_t i) {
+    T tmp = a[i];
+    if (tmp == T(3.14)) {
+      a[i] *= 2;;
+    }
+  });
+  #else
+  std::for_each(exe_policy, a, a + array_size, [a=a](T& e) {
+    auto i = &e - a;
+    T tmp = a[i];
+    if (tmp == T(3.14)) {
+      a[i] *= 2;;
+    }
+  });
+  #endif
+}
+
+template <class T>
+void STDStream<T>::write(T initA)
+{
+  #ifdef INDICES
+  std::for_each_n(exe_policy, counting_iter(0), array_size, [a=a, initA](intptr_t i) {
+    a[i] = initA;
+  });
+  #else
+  std::for_each(exe_policy, a, a + array_size, [=,a=a](T& e) {
+    auto i = &e - a;
+    a[i] = initA;
+  });
+  #endif
+}
+
+template <class T>
+void STDStream<T>::scan()
+{
+  std::exclusive_scan(exe_policy, si, si + array_size, so, scan_t<T>(0));
+}
+
 
 void listDevices(void)
 {

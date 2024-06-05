@@ -130,7 +130,7 @@ void HIPStream<T>::init_arrays(T initA, T initB, T initC)
 }
 
 template <class T>
-void HIPStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
+void HIPStream<T>::get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s)
 {
   hipDeviceSynchronize();
 #if defined(PAGEFAULT) || defined(MANAGED)
@@ -313,6 +313,54 @@ void listDevices(void)
   }
 }
 
+template <class T>
+void HIPStream<T>::scan()
+{
+  std::cerr << "scan unimplemented!" << std::endl;
+  std::terminate();
+}
+
+template <typename T>
+__global__ void read_kernel(T * a, size_t array_size)
+{
+  const T scalar = startScalar;
+  for (size_t i = (size_t)threadIdx.x + (size_t)blockDim.x * blockIdx.x; i < array_size; i += (size_t)gridDim.x * blockDim.x) {
+    T tmp = a[i];
+    // Control-dependency on loading a[i]: never true, but checking it requires loading value:
+    if (tmp == T(3.14)) {
+      a[i] *= 2;
+    }
+  }
+}
+
+template <class T>
+void HIPStream<T>::read()
+{
+  size_t blocks = ceil_div(array_size, TBSIZE);
+  read_kernel<T><<<dim3(blocks), dim3(TBSIZE), 0, 0>>>(d_a, array_size);
+  check_error();
+  hipDeviceSynchronize();
+  check_error();
+}
+
+template <typename T>
+__global__ void write_kernel(T * a, T initA, size_t array_size)
+{
+  const T scalar = startScalar;
+  for (size_t i = (size_t)threadIdx.x + (size_t)blockDim.x * blockIdx.x; i < array_size; i += (size_t)gridDim.x * blockDim.x) {
+    a[i] = initA;
+  }
+}
+
+template <class T>
+void HIPStream<T>::write(T initA)
+{
+  size_t blocks = ceil_div(array_size, TBSIZE);
+  write_kernel<T><<<dim3(blocks), dim3(TBSIZE), 0, 0>>>(d_a, initA, array_size);
+  check_error();
+  hipDeviceSynchronize();
+  check_error();
+}
 
 std::string getDeviceName(const int device)
 {

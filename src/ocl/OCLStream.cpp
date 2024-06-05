@@ -270,6 +270,21 @@ T OCLStream<T>::dot()
 }
 
 template <class T>
+void OCLStream<T>::read() {
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void OCLStream<T>::write(T initA) {
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
+void OCLStream<T>::scan() {
+  throw std::runtime_error("unimplemented");
+}
+
+template <class T>
 void OCLStream<T>::init_arrays(T initA, T initB, T initC)
 {
   (*init_kernel)(
@@ -280,7 +295,7 @@ void OCLStream<T>::init_arrays(T initA, T initB, T initC)
 }
 
 template <class T>
-void OCLStream<T>::get_arrays(T const*& a, T const*& b, T const*& c)
+void OCLStream<T>::get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*&)
 {
   h_a.resize(array_size);
   h_b.resize(array_size);

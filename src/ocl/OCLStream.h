@@ -52,7 +52,7 @@ class OCLStream : public Stream<T>
     cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer> *triad_kernel;
     cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer> *nstream_kernel;
     cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl::LocalSpaceArg, cl_long> *dot_kernel;
-
+  
     // NDRange configuration for the dot kernel
     size_t dot_num_groups;
     size_t dot_wgsize;
@@ -69,8 +69,11 @@ class OCLStream : public Stream<T>
     void triad() override;
     void nstream() override;
     T dot() override;
+    void read() override;
+    void write(T initA) override;
+    void scan() override;
 
-    void get_arrays(T const*& a, T const*& b, T const*& c) override;
+    void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*& s) override;
     void init_arrays(T initA, T initB, T initC);
 };
 

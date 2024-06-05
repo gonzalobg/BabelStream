@@ -14,9 +14,9 @@
 
 #include <sycl/sycl.hpp>
 
-#ifdef SYCL2020ACC
+#ifdef ACCESSOR
 #define SYCLIMPL "Accessors"
-#elif SYCL2020USM
+#elif USM
 #define SYCLIMPL "USM"
 #else
 #error unimplemented
@@ -37,7 +37,9 @@ class SYCLStream : public Stream<T>
 
     // Buffers
     T *a, *b, *c, *sum{};
+  #ifdef ACCESSOR
     sycl::buffer<T> d_a, d_b, d_c, d_sum;
+  #endif
 
   public:
 
@@ -51,8 +53,11 @@ class SYCLStream : public Stream<T>
     void triad() override;
     void nstream() override;
     T    dot() override;
+    void read() override;
+    void write(T initA) override;
+    void scan() override;
 
-    void get_arrays(T const*& a, T const*& b, T const*& c) override;    
+    void get_arrays(T const*& a, T const*& b, T const*& c, scan_t<T> const*&) override;
     void init_arrays(T initA, T initB, T initC);
 };
 
